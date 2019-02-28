@@ -18,7 +18,7 @@
 #include <sys/types.h>
 
 #include <assert.h>
-#include <endian.h>
+#include <sys/endian.h>
 #include <stdint.h>
 #include <stdlib.h>
 

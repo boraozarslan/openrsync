@@ -14,6 +14,7 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+#include <sys/capsicum.h>
 #include <sys/queue.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -267,13 +268,6 @@ rsync_socket(const struct opts *opts, const struct fargs *f)
 		return 0;
 	}
 
-	/* Drop the DNS pledge. */
-
-	if (pledge("stdio unix rpath wpath cpath dpath fattr chown getpw inet unveil", NULL) == -1) {
-		ERR(&sess, "pledge");
-		goto out;
-	}
-
 	/*
 	 * Iterate over all addresses, trying to connect.
 	 * When we succeed, then continue using the connected socket.
@@ -289,9 +283,8 @@ rsync_socket(const struct opts *opts, const struct fargs *f)
 			break;
 	}
 
-	/* Drop the inet pledge. */
-	if (pledge("stdio unix rpath wpath cpath dpath fattr chown getpw unveil", NULL) == -1) {
-		ERR(&sess, "pledge");
+	if (cap_enter() < 0 && errno != ENOSYS) {
+		ERRX(&sess, "cap_enter");
 		goto out;
 	}
 

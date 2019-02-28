@@ -16,6 +16,7 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+#include <sys/capsicum.h>
 #include <sys/mman.h>
 #include <sys/queue.h>
 #include <sys/stat.h>
@@ -183,8 +184,42 @@ rsync_receiver(struct sess *sess, int fdin, int fdout, const char *root)
 	struct upload	*ul = NULL;
 	mode_t		 oumask;
 
-	if (pledge("stdio unix rpath wpath cpath dpath fattr chown getpw unveil", NULL) == -1) {
-		ERR(sess, "pledge");
+	/*
+	 * Create the path for our destination directory, if we're not
+	 * in dry-run mode (which would otherwise crash w/the pledge).
+	 * This uses our current umask: we might set the permissions on
+	 * this directory in post_dir().
+	 */
+
+	if (!sess->opts->dry_run) {
+		if ((tofree = strdup(root)) == NULL) {
+			ERR(sess, "strdup");
+			goto out;
+		} else if (mkpath(sess, tofree) < 0) {
+			ERRX1(sess, "%s: mkpath2", root);
+			free(tofree);
+			goto out;
+		}
+		free(tofree);
+	}
+
+	/*
+	 * Disable umask() so we can set permissions fully.
+	 * Then open the directory iff we're not in dry_run.
+	 */
+
+	oumask = umask(0);
+
+	if (!sess->opts->dry_run) {
+		dfd = open(root, O_RDONLY | O_DIRECTORY, 0);
+		if (dfd == -1) {
+			ERR(sess, "%s: open", root);
+			goto out;
+		}
+	}
+
+	if (cap_enter() < 0 && errno != ENOSYS) {
+		ERRX(sess, "cap_enter");
 		goto out;
 	}
 
@@ -236,40 +271,6 @@ rsync_receiver(struct sess *sess, int fdin, int fdout, const char *root)
 	LOG2(sess, "%s: receiver destination", root);
 
 	/*
-	 * Create the path for our destination directory, if we're not
-	 * in dry-run mode (which would otherwise crash w/the pledge).
-	 * This uses our current umask: we might set the permissions on
-	 * this directory in post_dir().
-	 */
-
-	if (!sess->opts->dry_run) {
-		if ((tofree = strdup(root)) == NULL) {
-			ERR(sess, "strdup");
-			goto out;
-		} else if (mkpath(sess, tofree) < 0) {
-			ERRX1(sess, "%s: mkpath", root);
-			free(tofree);
-			goto out;
-		}
-		free(tofree);
-	}
-
-	/*
-	 * Disable umask() so we can set permissions fully.
-	 * Then open the directory iff we're not in dry_run.
-	 */
-
-	oumask = umask(0);
-
-	if (!sess->opts->dry_run) {
-		dfd = open(root, O_RDONLY | O_DIRECTORY, 0);
-		if (dfd == -1) {
-			ERR(sess, "%s: open", root);
-			goto out;
-		}
-	}
-
-	/*
 	 * Begin by conditionally getting all files we have currently
 	 * available in our destination.
 	 */
@@ -278,21 +279,6 @@ rsync_receiver(struct sess *sess, int fdin, int fdout, const char *root)
 	    sess->opts->recursive &&
 	    !flist_gen_dels(sess, root, &dfl, &dflsz, fl, flsz)) {
 		ERRX1(sess, "flist_gen_local");
-		goto out;
-	}
-
-	/*
-	 * Make our entire view of the file-system be limited to what's
-	 * in the root directory.
-	 * This prevents us from accidentally (or "under the influence")
-	 * writing into other parts of the file-system.
-	 */
-
-	if (unveil(root, "rwc") == -1) {
-		ERR(sess, "%s: unveil", root);
-		goto out;
-	} else if (unveil(NULL, NULL) == -1) {
-		ERR(sess, "%s: unveil", root);
 		goto out;
 	}
 

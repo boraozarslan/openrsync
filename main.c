@@ -14,6 +14,8 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+#include <sys/event.h>
+#include <sys/procdesc.h>
 #include <sys/queue.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -299,7 +301,8 @@ main(int argc, char *argv[])
 {
 	struct opts	 opts;
 	pid_t		 child;
-	int		 fds[2], c, st;
+	int		 fds[2], c, pd, kq, nev;
+	struct kevent	 ev, rev;
 	struct fargs	*fargs;
 	struct option	 lopts[] = {
 		{ "port",	required_argument, NULL,		3 },
@@ -333,12 +336,6 @@ main(int argc, char *argv[])
 		{ "verbose",	no_argument,	&opts.verbose,		1 },
 		{ "no-verbose",	no_argument,	&opts.verbose,		0 },
 		{ NULL,		0,		NULL,			0 }};
-
-	/* Global pledge. */
-
-	if (pledge("stdio unix rpath wpath cpath dpath inet fattr chown dns getpw proc exec unveil",
-	    NULL) == -1)
-		err(EXIT_FAILURE, "pledge");
 
 	memset(&opts, 0, sizeof(struct opts));
 
@@ -423,8 +420,6 @@ main(int argc, char *argv[])
 	 */
 
 	if (opts.server) {
-		if (pledge("stdio unix rpath wpath cpath dpath fattr chown getpw unveil", NULL) == -1)
-			err(EXIT_FAILURE, "pledge");
 		c = rsync_server(&opts, (size_t)argc, argv);
 		return c ? EXIT_SUCCESS : EXIT_FAILURE;
 	}
@@ -450,49 +445,31 @@ main(int argc, char *argv[])
 
 	if (fargs->remote) {
 		assert(fargs->mode == FARGS_RECEIVER);
-		if (pledge("stdio unix rpath wpath cpath dpath inet fattr chown dns getpw unveil",
-		    NULL) == -1)
-			err(EXIT_FAILURE, "pledge");
 		c = rsync_socket(&opts, fargs);
 		fargs_free(fargs);
 		return c ? EXIT_SUCCESS : EXIT_FAILURE;
 	}
-
-	/* Drop the dns/inet possibility. */
-
-	if (pledge("stdio unix rpath wpath cpath dpath fattr chown getpw proc exec unveil",
-	    NULL) == -1)
-		err(EXIT_FAILURE, "pledge");
 
 	/* Create a bidirectional socket and start our child. */
 
 	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, fds) == -1)
 		err(EXIT_FAILURE, "socketpair");
 
-	if ((child = fork()) == -1) {
+	if ((child = pdfork(&pd, 0)) == -1) {
 		close(fds[0]);
 		close(fds[1]);
 		err(EXIT_FAILURE, "fork");
 	}
 
-	/* Drop the fork possibility. */
-
-	if (pledge("stdio unix rpath wpath cpath dpath fattr chown getpw exec unveil", NULL) == -1)
-		err(EXIT_FAILURE, "pledge");
-
 	if (child == 0) {
 		close(fds[0]);
 		fds[0] = -1;
-		if (pledge("stdio exec", NULL) == -1)
-			err(EXIT_FAILURE, "pledge");
 		rsync_child(&opts, fds[1], fargs);
 		/* NOTREACHED */
 	}
 
 	close(fds[1]);
 	fds[1] = -1;
-	if (pledge("stdio unix rpath wpath cpath dpath fattr chown getpw unveil", NULL) == -1)
-		err(EXIT_FAILURE, "pledge");
 	c = rsync_client(&opts, fds[0], fargs);
 	fargs_free(fargs);
 
@@ -507,9 +484,19 @@ main(int argc, char *argv[])
 		fds[0] = -1;
 	}
 
-	if (waitpid(child, &st, 0) == -1)
-		err(EXIT_FAILURE, "waitpid");
-	if (!(WIFEXITED(st) && WEXITSTATUS(st) == EXIT_SUCCESS))
+	if ((kq = kqueue()) == -1) {
+		perror("kqueue");
+		exit(EXIT_FAILURE);
+	}
+	EV_SET(&ev, pd, EVFILT_PROCDESC, EV_ADD|EV_ENABLE|EV_ONESHOT,
+	    NOTE_EXIT, 0, 0);
+
+	nev = kevent(kq, &ev, 1, &rev, 1, NULL);
+	if (nev == -1)
+		err(EXIT_FAILURE, "kevent");
+	if ((rev.fflags & NOTE_EXIT) == 0)
+		err(EXIT_FAILURE, "Something other than NOTE_EXIT");
+	if (!(WIFEXITED(rev.data) && WEXITSTATUS(rev.data) == EXIT_SUCCESS))
 		c = 0;
 
 	if (fds[0] != -1)

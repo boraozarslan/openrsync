@@ -20,6 +20,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <sys/endian.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <math.h>

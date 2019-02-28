@@ -27,12 +27,12 @@ MANDIR	 = $(PREFIX)/man
 BINDIR	 = $(PREFIX)/bin
 
 # The -O0 is to help with debugging coredumps.
-CFLAGS	+= -O0 -g -W -Wall -Wextra -Wno-unused-parameter
+CFLAGS	+= -O0 -g -W -Wall -Wextra -Wno-unused-parameter -DWITH_CASPER
 
 all: openrsync
 
 openrsync: $(ALLOBJS)
-	$(CC) -o $@ $(ALLOBJS) -lm
+	$(CC) -o $@ $(ALLOBJS) -lm -lcap_fileargs -lcasper
 
 afl: $(AFLS)
 

@@ -14,11 +14,13 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+#include <sys/capsicum.h>
 #include <sys/mman.h>
 #include <sys/queue.h>
 #include <sys/stat.h>
 
 #include <assert.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <poll.h>
@@ -408,8 +410,14 @@ rsync_sender(struct sess *sess, int fdin,
 	size_t		    wbufpos = 0, wbufsz = 0, wbufmax = 0;
 	ssize_t		    ssz;
 
-	if (pledge("stdio getpw rpath unveil", NULL) == -1) {
-		ERR(sess, "pledge");
+	cap_rights_t rights;
+	fileargs_t* fa = fileargs_init(argc, argv, O_RDONLY|O_NONBLOCK, 0,
+	    cap_rights_init(&rights, CAP_FSTAT, CAP_READ, CAP_EVENT, CAP_MMAP_R));
+	if (fa == NULL)
+		ERR(sess, "fileargs_init");
+
+	if (cap_enter() < 0 && errno != ENOSYS) {
+		ERR(sess, "cap_enter");
 		return 0;
 	}
 
@@ -435,7 +443,7 @@ rsync_sender(struct sess *sess, int fdin,
 	 * This will also remove all invalid files.
 	 */
 
-	if (!flist_gen(sess, argc, argv, &fl, &flsz)) {
+	if (!flist_gen(sess, argc, argv, &fl, &flsz, fa)) {
 		ERRX1(sess, "flist_gen");
 		goto out;
 	}
@@ -509,7 +517,10 @@ rsync_sender(struct sess *sess, int fdin,
 		}
 		for (i = 0; i < 3; i++)
 			if (pfd[i].revents & (POLLERR|POLLNVAL)) {
-				ERRX(sess, "poll: bad fd");
+				if (pfd[i].revents & POLLERR) {
+					ERRX(sess, "shit");
+				}
+				ERRX(sess, "poll[%zu]: bad fd", i);
 				goto out;
 			} else if (pfd[i].revents & POLLHUP) {
 				ERRX(sess, "poll: hangup");
@@ -691,8 +702,7 @@ rsync_sender(struct sess *sess, int fdin,
 			 * block of not being primed.
 			 */
 
-			up.stat.fd = open(fl[up.cur->idx].path,
-				O_RDONLY|O_NONBLOCK, 0);
+			up.stat.fd = fileargs_open(fa, fl[up.cur->idx].path);
 			if (up.stat.fd == -1) {
 				ERR(sess, "%s: open", fl[up.cur->idx].path);
 				goto out;

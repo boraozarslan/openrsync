@@ -15,6 +15,8 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+#include <sys/capsicum.h>
+#include <sys/nv.h>
 #include <sys/param.h>
 #include <sys/queue.h>
 #include <sys/stat.h>
@@ -29,6 +31,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <libcasper.h>
+#include <casper/cap_fileargs.h>
 
 #include "extern.h"
 
@@ -523,8 +528,10 @@ flist_realloc(struct sess *sess, struct flist **fl, size_t *sz, size_t *max)
 		return 1;
 	}
 
-	pp = recallocarray(*fl, *max,
-		*max + FLIST_CHUNK_SIZE, sizeof(struct flist));
+	pp = calloc(*max + FLIST_CHUNK_SIZE, sizeof(struct flist));
+	memcpy(pp, *fl, (*sz) * sizeof(struct flist));
+	free(*fl);
+
 	if (pp == NULL) {
 		ERR(sess, "recallocarray");
 		return 0;
@@ -802,10 +809,10 @@ out:
  */
 static int
 flist_gen_dirent(struct sess *sess, char *root, struct flist **fl, size_t *sz,
-    size_t *max)
+    size_t *max, fileargs_t *fa)
 {
 	char		*cargv[2], *cp;
-	int		 rc = 0;
+	int		 rc = 0, fd;
 	FTS		*fts;
 	FTSENT		*ent;
 	struct flist	*f;
@@ -820,7 +827,10 @@ flist_gen_dirent(struct sess *sess, char *root, struct flist **fl, size_t *sz,
 	 * the non-recursive scan.
 	 */
 
-	if (lstat(root, &st) == -1) {
+	if ((fd = fileargs_open(fa, root)) < 0) {
+		ERR(sess, "%s: fileargs_open", root);
+		return 0;
+	} else if (fstat(fd, &st) == -1) {
 		ERR(sess, "%s: lstat", root);
 		return 0;
 	} else if (S_ISREG(st.st_mode)) {
@@ -833,10 +843,6 @@ flist_gen_dirent(struct sess *sess, char *root, struct flist **fl, size_t *sz,
 
 		if (!flist_append(sess, f, &st, root)) {
 			ERRX1(sess, "flist_append");
-			return 0;
-		}
-		if (unveil(root, "r") == -1) {
-			ERR(sess, "%s: unveil", root);
 			return 0;
 		}
 		return 1;
@@ -853,10 +859,6 @@ flist_gen_dirent(struct sess *sess, char *root, struct flist **fl, size_t *sz,
 
 		if (!flist_append(sess, f, &st, root)) {
 			ERRX1(sess, "flist_append");
-			return 0;
-		}
-		if (unveil(root, "r") == -1) {
-			ERR(sess, "%s: unveil", root);
 			return 0;
 		}
 		return 1;
@@ -959,10 +961,6 @@ flist_gen_dirent(struct sess *sess, char *root, struct flist **fl, size_t *sz,
 		ERR(sess, "fts_read");
 		goto out;
 	}
-	if (unveil(root, "r") == -1) {
-		ERR(sess, "%s: unveil", root);
-		goto out;
-	}
 
 	LOG3(sess, "generated %zu filenames: %s", flsz, root);
 	rc = 1;
@@ -980,12 +978,12 @@ out:
  */
 static int
 flist_gen_dirs(struct sess *sess, size_t argc, char **argv, struct flist **flp,
-    size_t *sz)
+    size_t *sz, fileargs_t *fa)
 {
 	size_t		 i, max = 0;
 
 	for (i = 0; i < argc; i++)
-		if (!flist_gen_dirent(sess, argv[i], flp, sz, &max))
+		if (!flist_gen_dirent(sess, argv[i], flp, sz, &max, fa))
 			break;
 
 	if (i == argc) {
@@ -1008,11 +1006,12 @@ flist_gen_dirs(struct sess *sess, size_t argc, char **argv, struct flist **flp,
  */
 static int
 flist_gen_files(struct sess *sess, size_t argc, char **argv,
-    struct flist **flp, size_t *sz)
+    struct flist **flp, size_t *sz, fileargs_t *fa)
 {
 	struct flist	*fl = NULL, *f;
 	size_t		 i, flsz = 0;
 	struct stat	 st;
+	int		 fd;
 
 	assert(argc);
 
@@ -1024,8 +1023,13 @@ flist_gen_files(struct sess *sess, size_t argc, char **argv,
 	for (i = 0; i < argc; i++) {
 		if ('\0' == argv[i][0])
 			continue;
-		if (lstat(argv[i], &st) == -1) {
-			ERR(sess, "%s: lstat", argv[i]);
+
+		if ((fd = fileargs_open(fa, argv[i])) < 0) {
+			ERR(sess, "%s: fileargs_open", argv[i]);
+			goto out;
+		}
+		if (fstat(fd, &st) == -1) {
+			ERR(sess, "%s: fstat", argv[i]);
 			goto out;
 		}
 
@@ -1054,12 +1058,6 @@ flist_gen_files(struct sess *sess, size_t argc, char **argv,
 		f = &fl[flsz++];
 		assert(f != NULL);
 
-		/* Add this file to our file-system worldview. */
-
-		if (unveil(argv[i], "r") == -1) {
-			ERR(sess, "%s: unveil", argv[i]);
-			goto out;
-		}
 		if (!flist_append(sess, f, &st, argv[i])) {
 			ERRX1(sess, "flist_append");
 			goto out;
@@ -1087,21 +1085,15 @@ out:
  */
 int
 flist_gen(struct sess *sess, size_t argc, char **argv, struct flist **flp,
-    size_t *sz)
+    size_t *sz, fileargs_t *fa)
 {
 	int	 rc;
 
 	assert(argc > 0);
 	rc = sess->opts->recursive ?
-		flist_gen_dirs(sess, argc, argv, flp, sz) :
-		flist_gen_files(sess, argc, argv, flp, sz);
+		flist_gen_dirs(sess, argc, argv, flp, sz, fa) :
+		flist_gen_files(sess, argc, argv, flp, sz, fa);
 
-	/* After scanning, lock our file-system view. */
-
-	if (unveil(NULL, NULL) == -1) {
-		ERR(sess, "unveil");
-		return 0;
-	}
 	if (!rc)
 		return 0;
 

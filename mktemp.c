@@ -34,6 +34,14 @@
 
 #include "extern.h"
 
+#ifndef O_DSYNC
+#define O_DSYNC 0
+#endif
+
+#ifndef O_RSYNC
+#define O_RSYNC 0
+#endif
+
 /*
  * The type of temporary files we can create.
  */

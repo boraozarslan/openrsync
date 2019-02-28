@@ -17,6 +17,10 @@
 #ifndef EXTERN_H
 #define EXTERN_H
 
+#include <sys/types.h>
+#include <libcasper.h>
+#include <casper/cap_fileargs.h>
+
 /*
  * This is the rsync protocol version that we support.
  */
@@ -272,7 +276,7 @@ void		  rsync_errx1(struct sess *, const char *,
 int		  flist_del(struct sess *, int,
 			const struct flist *, size_t);
 int		  flist_gen(struct sess *, size_t, char **,
-			struct flist **, size_t *);
+			struct flist **, size_t *, fileargs_t *);
 int		  flist_gen_local(struct sess *, const char *,
 			struct flist **, size_t *);
 void		  flist_free(struct flist *, size_t);
