@@ -413,8 +413,10 @@ rsync_sender(struct sess *sess, int fdin,
 	cap_rights_t rights;
 	fileargs_t* fa = fileargs_init(argc, argv, O_RDONLY|O_NONBLOCK, 0,
 	    cap_rights_init(&rights, CAP_FSTAT, CAP_READ, CAP_EVENT, CAP_MMAP_R));
-	if (fa == NULL)
+	if (fa == NULL) {
 		ERR(sess, "fileargs_init");
+		return 0;
+	}
 
 	if (cap_enter() < 0 && errno != ENOSYS) {
 		ERR(sess, "cap_enter");
@@ -517,10 +519,7 @@ rsync_sender(struct sess *sess, int fdin,
 		}
 		for (i = 0; i < 3; i++)
 			if (pfd[i].revents & (POLLERR|POLLNVAL)) {
-				if (pfd[i].revents & POLLERR) {
-					ERRX(sess, "shit");
-				}
-				ERRX(sess, "poll[%zu]: bad fd", i);
+				ERRX(sess, "poll: bad fd");
 				goto out;
 			} else if (pfd[i].revents & POLLHUP) {
 				ERRX(sess, "poll: hangup");
