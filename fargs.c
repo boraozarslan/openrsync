@@ -24,7 +24,7 @@
 
 #include "extern.h"
 
-#define	RSYNC_PATH	"rsync"
+#define	RSYNC_PATH	"openrsync"
 
 char **
 fargs_cmdline(struct sess *sess, const struct fargs *f)

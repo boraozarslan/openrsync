@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 
 #include <assert.h>
+#include <capsicum_helpers.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -218,8 +219,8 @@ rsync_receiver(struct sess *sess, int fdin, int fdout, const char *root)
 		}
 	}
 
-	if (cap_enter() < 0 && errno != ENOSYS) {
-		ERRX(sess, "cap_enter");
+	if (caph_enter() < 0) {
+		ERR(sess, "caph_enter");
 		goto out;
 	}
 

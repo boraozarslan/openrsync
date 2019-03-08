@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 
 #include <assert.h>
+#include <capsicum_helpers.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -418,8 +419,8 @@ rsync_sender(struct sess *sess, int fdin,
 		return 0;
 	}
 
-	if (cap_enter() < 0 && errno != ENOSYS) {
-		ERR(sess, "cap_enter");
+	if (caph_enter() < 0) {
+		ERR(sess, "caph_enter");
 		return 0;
 	}
 

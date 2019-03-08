@@ -29,7 +29,7 @@
 /*
  * The default service (see services(5)) for rsync.
  */
-#define RSYNC_SERVICE	"rsync"
+#define RSYNC_SERVICE	"openrsync"
 
 /*
  * Maximum amount of file data sent over the wire at once.

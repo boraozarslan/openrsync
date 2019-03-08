@@ -22,6 +22,7 @@
 #include <netinet/in.h>
 
 #include <assert.h>
+#include <capsicum_helpers.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -268,6 +269,11 @@ rsync_socket(const struct opts *opts, const struct fargs *f)
 		return 0;
 	}
 
+	if (caph_enter() < 0) {
+		ERR(&sess, "caph_enter");
+		goto out;
+	}
+
 	/*
 	 * Iterate over all addresses, trying to connect.
 	 * When we succeed, then continue using the connected socket.
@@ -281,11 +287,6 @@ rsync_socket(const struct opts *opts, const struct fargs *f)
 			goto out;
 		} else if (c > 0)
 			break;
-	}
-
-	if (cap_enter() < 0 && errno != ENOSYS) {
-		ERRX(&sess, "cap_enter");
-		goto out;
 	}
 
 	if (i == srcsz) {
